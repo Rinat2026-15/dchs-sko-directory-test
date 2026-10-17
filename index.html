@@ -17,7 +17,7 @@ button{cursor:pointer;background:#c62828;color:#fff;border:0}
 .stat b{display:block;font-size:18px}
 #list{overflow:auto;flex:1} .item{padding:9px 11px;border-bottom:1px solid #eee;cursor:pointer}
 .item:hover{background:#f8eaea} .item b{display:block;font-size:14px} .item small{color:#666}
-#map{position:relative;overflow:hidden;flex:1;background:#dbe7d3;cursor:grab}
+#map{position:relative;overflow:hidden;flex:1;background:#dbe7d3;cursor:grab;touch-action:none}
 #map.drag{cursor:grabbing} #tiles{position:absolute;left:0;top:0}
 .tile{position:absolute;width:256px;height:256px;background:#e7e7e7}
 #markers{position:absolute;inset:0;pointer-events:none}
@@ -367,17 +367,70 @@ document.getElementById('reset').onclick=()=>{document.getElementById('search').
 document.getElementById('plus').onclick=()=>{zoom=Math.min(18,zoom+1);renderTiles()};
 document.getElementById('minus').onclick=()=>{zoom=Math.max(3,zoom-1);renderTiles()};
 document.getElementById('home').onclick=()=>{zoom=7;center={lat:54.87,lon:69.15};update()};
+// Жесты карты: один палец перемещает, два пальца изменяют масштаб.
+// Координаты под серединой жеста остаются на месте при изменении масштаба.
+const activeMapPointers=new Map();
+let lastPinch=null;
+function pointerPair(){return Array.from(activeMapPointers.values()).slice(0,2)}
+function pinchGeometry(){
+ const [a,b]=pointerPair();
+ return {x:(a.x+b.x)/2,y:(a.y+b.y)/2,distance:Math.hypot(a.x-b.x,a.y-b.y)};
+}
+function mapToGeo(x,y,z=zoom){
+ const rect=map.getBoundingClientRect(),[cx,cy]=world(center.lat,center.lon,z);
+ return unworld(cx+x-rect.left-rect.width/2,cy+y-rect.top-rect.height/2,z);
+}
+function keepGeoAt(geo,x,y,z=zoom){
+ const rect=map.getBoundingClientRect(),[wx,wy]=world(geo[0],geo[1],z);
+ const [lat,lon]=unworld(wx-(x-rect.left-rect.width/2),wy-(y-rect.top-rect.height/2),z);
+ center={lat,lon};
+}
 map.onpointerdown=e=>{
- if(e.target.closest('.marker,.popup,.mapbtns'))return;
- dragging=true;sx=e.clientX;sy=e.clientY;map.classList.add('drag');
- map.setPointerCapture(e.pointerId);
+ if(e.target.closest('.popup,.mapbtns'))return;
+ if(e.target.closest('.marker')&&activeMapPointers.size===0)return;
+ if(activeMapPointers.size>=2)return;
+ activeMapPointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+ try{map.setPointerCapture(e.pointerId)}catch{}
+ if(activeMapPointers.size===2){lastPinch=pinchGeometry();dragging=false;map.classList.remove('drag')}
+ else{lastPinch=null;dragging=true;sx=e.clientX;sy=e.clientY;map.classList.add('drag')}
+ if(e.pointerType==='touch')e.preventDefault();
 };
-map.onpointerup=map.onpointercancel=()=>{dragging=false;map.classList.remove('drag')};
 map.onpointermove=e=>{
- if(!dragging)return;
- const [cx,cy]=world(center.lat,center.lon,zoom),nx=cx-(e.clientX-sx),ny=cy-(e.clientY-sy);
- const [lat,lon]=unworld(nx,ny,zoom);center={lat,lon};sx=e.clientX;sy=e.clientY;renderTiles();
+ const previous=activeMapPointers.get(e.pointerId);
+ if(!previous)return;
+ activeMapPointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+ if(activeMapPointers.size===2){
+  const current=pinchGeometry();
+  if(!lastPinch){lastPinch=current;return}
+  const geo=mapToGeo(lastPinch.x,lastPinch.y);
+  // Порог уменьшает дрожание при работе с целочисленными уровнями тайлов Esri.
+  if(lastPinch.distance>0&&current.distance>0){
+   const ratio=current.distance/lastPinch.distance;
+   if(ratio>=1.30&&zoom<18){zoom++;lastPinch.distance=current.distance}
+   else if(ratio<=1/1.30&&zoom>3){zoom--;lastPinch.distance=current.distance}
+  }
+  keepGeoAt(geo,current.x,current.y);
+  lastPinch={x:current.x,y:current.y,distance:lastPinch.distance};
+  renderTiles();
+ }else{
+  const [cx,cy]=world(center.lat,center.lon,zoom);
+  const [lat,lon]=unworld(cx-(e.clientX-previous.x),cy-(e.clientY-previous.y),zoom);
+  center={lat,lon};sx=e.clientX;sy=e.clientY;renderTiles();
+ }
+ if(e.pointerType==='touch')e.preventDefault();
 };
+function endMapPointer(e){
+ if(!activeMapPointers.delete(e.pointerId))return;
+ try{if(map.hasPointerCapture(e.pointerId))map.releasePointerCapture(e.pointerId)}catch{}
+ lastPinch=null;
+ if(activeMapPointers.size===1){
+  const point=Array.from(activeMapPointers.values())[0];
+  sx=point.x;sy=point.y;dragging=true;map.classList.add('drag');
+ }else{dragging=false;map.classList.remove('drag')}
+}
+map.onpointerup=endMapPointer;
+map.onpointercancel=endMapPointer;
+map.onlostpointercapture=endMapPointer;
 map.onwheel=e=>{e.preventDefault();zoom=Math.max(3,Math.min(18,zoom+(e.deltaY<0?1:-1)));renderTiles()};
 window.onresize=renderTiles;
 [...new Set(DATA.map(r=>String(val(r,['Район'])).trim()).filter(x=>x&&x!=='—'))].sort((a,b)=>a.localeCompare(b,'ru')).forEach(d=>{const o=document.createElement('option');o.value=d;o.textContent=d;document.getElementById('district').appendChild(o)});
