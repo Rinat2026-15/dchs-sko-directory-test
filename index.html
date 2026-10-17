@@ -87,7 +87,7 @@ header{gap:12px}.admin-header-btn{width:auto;margin:0 0 0 auto;padding:7px 11px;
 <div class="stat"><b id="shown">0</b>показано</div>
 <div class="stat"><b id="staff">0</b>личный состав</div>
 </div>
-<input id="search" placeholder="🔎 Поиск подразделения, села, района">
+<input id="search" placeholder="🔎 СПЧ-1, ПЧ-16, Петропавловск, район">
 <select id="district"><option value="">Все районы</option></select>
 <button id="reset">Сбросить фильтры</button>
 </div>
@@ -103,7 +103,7 @@ header{gap:12px}.admin-header-btn{width:auto;margin:0 0 0 auto;padding:7px 11px;
 
 <div id="adminPanel" role="dialog" aria-modal="true" aria-label="Управление справочником">
  <div class="admin-dialog">
-  <h2>Администратор — тестовый режим</h2>
+  <h2>Администратор справочника</h2>
   <p class="admin-note">Вход выполняется через Supabase. Изменения доступны только назначенному администратору. Не вводите служебные данные без согласования.</p>
   <div id="adminLogin">
    <label for="adminEmail">Электронная почта</label><input id="adminEmail" type="email" autocomplete="username">
@@ -111,7 +111,7 @@ header{gap:12px}.admin-header-btn{width:auto;margin:0 0 0 auto;padding:7px 11px;
    <div class="admin-actions"><button type="button" id="adminSignIn">Войти</button><button type="button" class="secondary" id="adminCloseLogin">Закрыть</button></div>
   </div>
   <div id="adminEditor">
-   <label for="adminRow">Тестовое подразделение</label><select id="adminRow"><option value="">Новое подразделение</option></select>
+   <label for="adminRow">Подразделение</label><select id="adminRow"><option value="">Новое подразделение</option></select>
    <label for="editName">Название *</label><input id="editName" maxlength="150" required>
    <label for="editDistrict">Район</label><input id="editDistrict" maxlength="150">
    <label for="editSettlement">Населённый пункт</label><input id="editSettlement" maxlength="150">
@@ -159,9 +159,44 @@ function renderTiles(){
  }
  renderMarkers(left,top);
 }
+// Поиск по номеру части имеет приоритет: ПЧ-1 не должна находить ПЧ-10 или СПЧ-1.
+function normalizeSearch(value){return String(value??'').toLowerCase().replace(/ё/g,'е').replace(/[‐‑‒–—−]/g,'-').replace(/\s+/g,' ').trim()}
+function normalizedUnit(value){
+ const m=normalizeSearch(value).match(/^(спч|пч|пп|псп|псч)\s*(?:[-№#]\s*)?(\d+)$/);
+ return m?{prefix:m[1],number:String(Number(m[2]))}:null;
+}
+function unitMatchesName(name,unit){
+ const n=normalizeSearch(name),rx=new RegExp('(?:^|[^а-яa-z0-9])'+unit.prefix+'\\s*[-№#]?\\s*0*'+unit.number+'(?![0-9])','i');
+ return rx.test(n);
+}
+function filteredRows(){
+ const q=normalizeSearch(document.getElementById('search').value);
+ const d=document.getElementById('district').value;
+ const districtRows=DATA.filter(r=>!d||val(r,['Район'])===d);
+ if(!q)return districtRows;
+ const unit=normalizedUnit(q);
+ if(unit)return districtRows.filter(r=>unitMatchesName(val(r,['Подразделение']),unit));
+ // Приоритет названию подразделения; район/город/село ищем, когда совпадений по названию нет.
+ const byName=districtRows.filter(r=>normalizeSearch(val(r,['Подразделение'])).includes(q));
+ if(byName.length)return byName;
+ return districtRows.filter(r=>['Район','Населенный пункт','Населённый пункт','Адрес'].some(k=>normalizeSearch(r[k]).includes(q)));
+}
+function focusOnResults(rows){
+ const coords=rows.map(coord).filter(Boolean);
+ if(!coords.length)return;
+ document.querySelectorAll('.popup').forEach(p=>p.remove());
+ if(coords.length===1){center={lat:coords[0][0],lon:coords[0][1]};zoom=13;return}
+ const margin=55,w=Math.max(80,map.clientWidth-2*margin),h=Math.max(80,map.clientHeight-2*margin);
+ for(let z=15;z>=3;z--){
+   const xs=coords.map(c=>world(c[0],c[1],z)[0]),ys=coords.map(c=>world(c[0],c[1],z)[1]);
+   if(Math.max(...xs)-Math.min(...xs)<=w&&Math.max(...ys)-Math.min(...ys)<=h){
+     zoom=z;const midX=(Math.max(...xs)+Math.min(...xs))/2,midY=(Math.max(...ys)+Math.min(...ys))/2;
+     const [lat,lon]=unworld(midX,midY,z);center={lat,lon};return;
+   }
+ }
+}
 function renderMarkers(left,top){
- markers.innerHTML='';const q=document.getElementById('search').value.toLowerCase().trim(),d=document.getElementById('district').value;
- const rows=DATA.filter(r=>{const text=Object.values(r).join(' ').toLowerCase();return(!q||text.includes(q))&&(!d||val(r,['Район'])===d)});
+ markers.innerHTML='';const rows=filteredRows();
  document.getElementById('all').textContent=DATA.length;document.getElementById('shown').textContent=rows.length;
  document.getElementById('staff').textContent=rows.reduce((s,r)=>s+(parseInt(val(r,['Личный состав']))||0),0);
  rows.forEach(r=>{const c=coord(r);if(!c)return;const [wx,wy]=world(c[0],c[1],zoom),el=document.createElement('div');el.className='marker';
@@ -176,22 +211,25 @@ function showPopup(r,anchor){
  p.innerHTML='<span class="close">✕</span><h3>🚒 '+esc(val(r,['Подразделение']))+'</h3>'+
  '<p><b>Район:</b> '+esc(val(r,['Район']))+'</p><p><b>Населённый пункт:</b> '+esc(place)+'</p>'+
  '<p><b>Личный состав:</b> '+esc(val(r,['Личный состав']))+'</p><p><b>Техника:</b> '+esc(val(r,['Техника']))+'</p>'+
- '<p><b>Телефон:</b> '+esc(val(r,['Номер телефона']))+'</p><p><b>Координаты:</b> '+coord(r).join(', ')+'</p>';
+ '<p><b>Телефон:</b> '+esc(val(r,['Номер телефона']))+'</p><p><b>Координаты:</b> '+(coord(r)?.join(', ')||'—')+'</p>';
  p.querySelector('.close').onclick=()=>p.remove();map.appendChild(p);
 }
 function renderList(){
- const q=document.getElementById('search').value.toLowerCase().trim(),d=document.getElementById('district').value,rows=DATA.filter(r=>{const text=Object.values(r).join(' ').toLowerCase();return(!q||text.includes(q))&&(!d||val(r,['Район'])===d)});
+ const rows=filteredRows();
  const list=document.getElementById('list');list.innerHTML='';if(!rows.length){list.innerHTML='<div style="padding:20px;color:#777">Ничего не найдено</div>';return}
- rows.forEach(r=>{const e=document.createElement('div');e.className='item';e.innerHTML='<b>'+esc(val(r,['Подразделение']))+'</b><small>'+esc(val(r,['Район']))+' · '+esc(val(r,['Населенный пункт','Населённый пункт']))+'</small>';e.onclick=()=>{const c=coord(r);if(c){
- center={lat:c[0],lon:c[1]};
- if(window.matchMedia('(max-width:700px)').matches){setMobileList(false)}else{renderTiles()}
- if(window.matchMedia('(max-width:700px)').matches){
-   const anchor={getBoundingClientRect:()=>{const mr=map.getBoundingClientRect();return {left:mr.left+mr.width/2,top:mr.top+mr.height/2}}};
-   showPopup(r,anchor);
- }
-}};list.appendChild(e)})
+ rows.forEach(r=>{const e=document.createElement('div');e.className='item';e.innerHTML='<b>'+esc(val(r,['Подразделение']))+'</b><small>'+esc(val(r,['Район']))+' · '+esc(val(r,['Населенный пункт','Населённый пункт']))+'</small>';
+ e.onclick=()=>{const c=coord(r);if(!c)return;
+   center={lat:c[0],lon:c[1]};zoom=13;
+   if(window.matchMedia('(max-width:700px)').matches)setMobileList(false);else renderTiles();
+   const matching=Array.from(markers.querySelectorAll('.marker')).find(el=>{
+     const left=parseFloat(el.style.left),top=parseFloat(el.style.top);
+     return Math.abs(left-map.clientWidth/2)<2&&Math.abs(top-(map.clientHeight/2-38))<3;
+   });
+   const fallback={getBoundingClientRect:()=>{const mr=map.getBoundingClientRect();return {left:mr.left+mr.width/2,top:mr.top+mr.height/2}}};
+   showPopup(r,matching||fallback);
+ };list.appendChild(e)})
 }
-function update(){renderTiles();renderList()}
+function update(refocus=false){if(refocus)focusOnResults(filteredRows());renderTiles();renderList()}
 function setMobileList(open){
  document.body.classList.toggle('list-open',open);
  const btn=document.getElementById('listToggle');
@@ -305,17 +343,17 @@ ae('adminSave').onclick=async()=>{
   await adminRequest('/rest/v1/departments'+(id?'?id=eq.'+encodeURIComponent(id):''),{
    method:id?'PATCH':'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify(body)
   });
-  await adminLoadRows(id);await loadRemoteData();adminMsg('Тестовая запись сохранена в Supabase.')
+  await adminLoadRows(id);await loadRemoteData();adminMsg('Запись сохранена в Supabase.')
  }catch(err){adminMsg('Не удалось сохранить: '+err.message)}
  finally{ae('adminSave').disabled=false}
 };
 ae('adminDelete').onclick=async()=>{
  const id=ae('adminRow').value;if(!adminToken||!id)return;
  const r=adminRows.find(x=>x.id===id);
- if(!confirm('Удалить тестовую запись «'+(r?.name||'')+'»?'))return;
+ if(!confirm('Удалить запись «'+(r?.name||'')+'»?'))return;
  try{
   await adminRequest('/rest/v1/departments?id=eq.'+encodeURIComponent(id),{method:'DELETE',headers:{Prefer:'return=minimal'}});
-  await adminLoadRows();await loadRemoteData();adminMsg('Тестовая запись удалена.')
+  await adminLoadRows();await loadRemoteData();adminMsg('Запись удалена.')
  }catch(err){adminMsg('Не удалось удалить: '+err.message)}
 };
 ae('adminSignOut').onclick=async()=>{
@@ -324,8 +362,8 @@ ae('adminSignOut').onclick=async()=>{
  adminRows=[];ae('adminPassword').value='';adminShowEditor(false);adminMsg('Вы вышли из административного режима.');
 };
 
-document.getElementById('search').oninput=update;document.getElementById('district').onchange=update;
-document.getElementById('reset').onclick=()=>{document.getElementById('search').value='';document.getElementById('district').value='';update()};
+document.getElementById('search').oninput=()=>update(true);document.getElementById('district').onchange=()=>update(true);
+document.getElementById('reset').onclick=()=>{document.getElementById('search').value='';document.getElementById('district').value='';zoom=8;center={lat:54.87,lon:69.15};update()};
 document.getElementById('plus').onclick=()=>{zoom=Math.min(18,zoom+1);renderTiles()};
 document.getElementById('minus').onclick=()=>{zoom=Math.max(3,zoom-1);renderTiles()};
 document.getElementById('home').onclick=()=>{zoom=7;center={lat:54.87,lon:69.15};update()};
