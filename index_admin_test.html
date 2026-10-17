@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Карта пожарных подразделений СКО</title>
+<style>
+*{box-sizing:border-box} html,body{margin:0;height:100%;font-family:Arial,sans-serif}
+body{display:flex;flex-direction:column;background:#eee} #syncStatus{padding:6px 12px;background:#fff8e1;color:#6d4c00;font-size:12px;border-bottom:1px solid #e6d7a8}
+header{height:52px;background:#c62828;color:#fff;display:flex;align-items:center;padding:0 16px;font-size:19px;font-weight:bold}
+#layout{display:flex;flex:1;min-height:0}
+#sidebar{width:350px;background:#fff;border-right:1px solid #ccc;display:flex;flex-direction:column;z-index:20}
+.controls{padding:10px;border-bottom:1px solid #ddd}
+input,select,button{width:100%;padding:9px;margin-bottom:7px;border:1px solid #bbb;border-radius:5px;background:#fff;font-size:14px}
+button{cursor:pointer;background:#c62828;color:#fff;border:0}
+.stats{display:flex;gap:5px;margin-bottom:8px} .stat{flex:1;text-align:center;background:#f2f2f2;padding:6px;border-radius:5px;font-size:11px}
+.stat b{display:block;font-size:18px}
+#list{overflow:auto;flex:1} .item{padding:9px 11px;border-bottom:1px solid #eee;cursor:pointer}
+.item:hover{background:#f8eaea} .item b{display:block;font-size:14px} .item small{color:#666}
+#map{position:relative;overflow:hidden;flex:1;background:#dbe7d3;cursor:grab}
+#map.drag{cursor:grabbing} #tiles{position:absolute;left:0;top:0}
+.tile{position:absolute;width:256px;height:256px;background:#e7e7e7}
+#markers{position:absolute;inset:0;pointer-events:none}
+.marker{position:absolute;width:34px;height:38px;margin-left:-17px;margin-top:-38px;pointer-events:auto;cursor:pointer;filter:drop-shadow(0 1px 2px #555)}
+.marker svg{width:34px;height:38px}
+.popup{position:absolute;width:320px;background:#fff;border-radius:8px;padding:12px;box-shadow:0 2px 12px #555;z-index:30;font-size:13px}
+.popup h3{margin:0 22px 8px 0;font-size:16px;color:#b71c1c} .popup p{margin:4px 0}
+.close{position:absolute;right:9px;top:7px;font-size:18px;cursor:pointer}
+.mapbtns{position:absolute;right:12px;top:12px;z-index:25;display:flex;flex-direction:column;gap:5px}
+.mapbtns button{width:38px;height:38px;margin:0;padding:0;font-size:20px;background:#fff;color:#333;border:1px solid #aaa;box-shadow:0 1px 4px #777}
+.status{position:absolute;left:10px;bottom:10px;z-index:25;background:#fff;padding:7px 10px;border-radius:5px;box-shadow:0 1px 5px #777;font-size:12px}
+#mapError{display:none;position:absolute;top:60px;left:50%;transform:translateX(-50%);z-index:40;background:#fff3cd;border:1px solid #e0b84b;padding:10px 14px;border-radius:6px;box-shadow:0 2px 8px #777;font-size:13px}
+
+/* Мобильная компоновка: фильтры → карта → сворачиваемый список. */
+#listToggle{display:none}
+@media (max-width:700px){
+ html,body{height:100%;height:100dvh;overflow:hidden}
+ header{height:auto;min-height:49px;padding:9px 12px;font-size:16px;line-height:1.25;flex-shrink:0}
+ #syncStatus{padding:5px 10px;flex-shrink:0}
+ #layout{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+ #sidebar{display:contents}
+ .controls{order:0;flex:none;padding:7px 10px 5px;border-bottom:1px solid #ddd;background:#fff}
+ .stats{margin-bottom:5px}
+ .stat{padding:3px;font-size:10px}.stat b{font-size:15px}
+ input,select,button{font-size:16px;min-height:38px;margin-bottom:5px;padding:7px}
+ .controls #reset{margin-bottom:0;min-height:32px;font-size:13px;padding:5px}
+ #map{order:1;flex:1 1 auto;min-height:170px;width:100%;touch-action:none}
+ #listToggle{display:block;order:2;flex-shrink:0;border-radius:0;margin:0;min-height:40px;font-size:14px;font-weight:bold;background:#a51f1f;color:#fff}
+ #list{display:none;order:3;flex:none;width:100%;height:min(32dvh,260px);overflow-y:auto;background:#fff;border-top:1px solid #ccc}
+ body.list-open #list{display:block}
+ .item{padding:10px 12px;min-height:46px}
+ .mapbtns{right:8px;top:8px;gap:4px}.mapbtns button{width:36px;height:36px;min-height:36px}
+ .status{left:5px;right:5px;bottom:5px;font-size:9px;padding:4px 5px;max-width:none;pointer-events:none}
+ .popup{width:calc(100% - 16px);max-height:calc(100% - 24px);overflow:auto;left:8px!important;top:8px!important;padding:12px;font-size:13px}
+ .popup p{overflow-wrap:anywhere;line-height:1.35}
+ #mapError{max-width:calc(100% - 20px);width:max-content;top:52px}
+}
+
+/* Тестовая панель администратора. Доступ к записи проверяется сервером Supabase (RLS). */
+header{gap:12px}.admin-header-btn{width:auto;margin:0 0 0 auto;padding:7px 11px;background:#fff;color:#a51f1f;min-height:32px;font-size:13px;white-space:nowrap}
+#adminPanel{display:none;position:fixed;inset:0;background:rgba(0,0,0,.58);z-index:100;align-items:center;justify-content:center;padding:12px}
+#adminPanel.open{display:flex}
+.admin-dialog{width:min(100%,540px);max-height:95dvh;overflow:auto;background:#fff;border-radius:10px;padding:16px;color:#222;box-shadow:0 5px 24px #2227}
+.admin-dialog h2{margin:0 0 10px;font-size:19px}
+.admin-dialog label{display:block;font-size:13px;margin:9px 0 3px}
+.admin-dialog input,.admin-dialog textarea,.admin-dialog select{width:100%;margin:0;padding:9px;min-height:38px;border:1px solid #aaa;border-radius:5px;background:#fff;color:#222;font:inherit}
+.admin-dialog textarea{min-height:66px;resize:vertical}
+.admin-dialog .admin-actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+.admin-dialog .admin-actions button{width:auto;flex:1;min-width:90px;margin:0}
+.admin-dialog .secondary{background:#e5e7eb;color:#111}
+.admin-dialog .danger{background:#9b1c1c}
+.admin-dialog .admin-note{font-size:12px;color:#666;line-height:1.4}
+#adminMessage{font-size:13px;white-space:pre-wrap;margin:8px 0;color:#7a281b}
+#adminEditor{display:none}
+@media(max-width:700px){header{font-size:14px}.admin-header-btn{font-size:12px;min-height:32px;padding:5px 7px}}
+</style>
+<link rel="manifest" href="manifest.webmanifest"><meta name="theme-color" content="#c62828"><link rel="icon" href="icon.svg" type="image/svg+xml"><script src="config.js"></script>
+</head>
+<body>
+<header>🚒 Справочник пожарных подразделений ДЧС СКО <button type="button" id="adminOpen" class="admin-header-btn">Администратор</button></header>
+<div id="syncStatus" role="status">Локальные данные · общая база не подключена</div>
+<div id="layout">
+<aside id="sidebar">
+<div class="controls">
+<div class="stats">
+<div class="stat"><b id="all">0</b>подразделений</div>
+<div class="stat"><b id="shown">0</b>показано</div>
+<div class="stat"><b id="staff">0</b>личный состав</div>
+</div>
+<input id="search" placeholder="🔎 Поиск подразделения, села, района">
+<select id="district"><option value="">Все районы</option></select>
+<button id="reset">Сбросить фильтры</button>
+</div>
+<div id="list" aria-label="Список подразделений"></div>
+</aside>
+<div id="map">
+<div id="tiles"></div><div id="markers"></div><div id="mapError">Не удалось загрузить карту Esri. Проверьте подключение к интернету или доступ к серверу Esri.</div>
+<div class="mapbtns"><button id="plus">+</button><button id="minus">−</button><button id="home">⌂</button></div>
+<div class="status">Карта: Esri World Topographic Map · © Esri и поставщики данных · интернет нужен для карты</div>
+</div>
+<button id="listToggle" type="button" aria-controls="list" aria-expanded="false">☰ Показать список подразделений</button>
+</div>
+
+<div id="adminPanel" role="dialog" aria-modal="true" aria-label="Управление справочником">
+ <div class="admin-dialog">
+  <h2>Администратор — тестовый режим</h2>
+  <p class="admin-note">Вход выполняется через Supabase. Изменения доступны только назначенному администратору. Не вводите служебные данные без согласования.</p>
+  <div id="adminLogin">
+   <label for="adminEmail">Электронная почта</label><input id="adminEmail" type="email" autocomplete="username">
+   <label for="adminPassword">Пароль</label><input id="adminPassword" type="password" autocomplete="current-password">
+   <div class="admin-actions"><button type="button" id="adminSignIn">Войти</button><button type="button" class="secondary" id="adminCloseLogin">Закрыть</button></div>
+  </div>
+  <div id="adminEditor">
+   <label for="adminRow">Тестовое подразделение</label><select id="adminRow"><option value="">Новое подразделение</option></select>
+   <label for="editName">Название *</label><input id="editName" maxlength="150" required>
+   <label for="editDistrict">Район</label><input id="editDistrict" maxlength="150">
+   <label for="editSettlement">Населённый пункт</label><input id="editSettlement" maxlength="150">
+   <label for="editAddress">Адрес</label><input id="editAddress" maxlength="250">
+   <label for="editStaff">Личный состав (человек)</label><input id="editStaff" type="number" min="0" step="1">
+   <label for="editEquipment">Техника</label><textarea id="editEquipment"></textarea>
+   <label for="editPhone">Телефон</label><input id="editPhone" maxlength="80">
+   <label for="editLatitude">Широта</label><input id="editLatitude" type="number" step="any" min="-90" max="90">
+   <label for="editLongitude">Долгота</label><input id="editLongitude" type="number" step="any" min="-180" max="180">
+   <div class="admin-actions"><button type="button" id="adminSave">Сохранить</button><button type="button" id="adminDelete" class="danger">Удалить</button></div>
+   <div class="admin-actions"><button type="button" id="adminSignOut" class="secondary">Выйти</button><button type="button" id="adminCloseEditor" class="secondary">Закрыть</button></div>
+  </div>
+  <p id="adminMessage" role="status"></p>
+ </div>
+</div>
+
+<script>
+let DATA=[];
+const TILE=256;
+const providers=[
+ z=>`https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/${z.z}/${z.y}/${z.x}`
+];
+let zoom=8, center={lat:54.87,lon:69.15}, dragging=false,sx=0,sy=0,failedTiles=0;
+
+function val(o,names){for(const n of names){if(o[n]!==undefined&&o[n]!==null&&String(o[n]).trim()!=='')return o[n]}return '—'}
+function coord(o){const lat=parseFloat(val(o,['Широта','широта','Latitude','lat']));const lon=parseFloat(val(o,['Долгота','долгота','Longitude','lon']));return Number.isFinite(lat)&&Number.isFinite(lon)?[lat,lon]:null}
+function esc(s){return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+function world(lat,lon,z){const n=2**z,x=(lon+180)/360*n,r=lat*Math.PI/180,y=(1-Math.log(Math.tan(r)+1/Math.cos(r))/Math.PI)/2*n;return[x*TILE,y*TILE]}
+function unworld(x,y,z){const n=2**z,lon=x/TILE/n*360-180,yy=y/TILE/n,lat=180/Math.PI*Math.atan(Math.sinh(Math.PI*(1-2*yy)));return[lat,lon]}
+
+const map=document.getElementById('map'),tiles=document.getElementById('tiles'),markers=document.getElementById('markers');
+
+function renderTiles(){
+ tiles.innerHTML='';failedTiles=0;document.getElementById('mapError').style.display='none';
+ const w=map.clientWidth,h=map.clientHeight,[cx,cy]=world(center.lat,center.lon,zoom),left=cx-w/2,top=cy-h/2;
+ tiles.style.left=(-left)+'px';tiles.style.top=(-top)+'px';
+ const minX=Math.floor(left/TILE)-1,maxX=Math.ceil((left+w)/TILE)+1,minY=Math.floor(top/TILE)-1,maxY=Math.ceil((top+h)/TILE)+1,N=2**zoom;
+ for(let x=minX;x<=maxX;x++)for(let y=minY;y<=maxY;y++){if(y<0||y>=N)continue;
+   const xx=((x%N)+N)%N, im=document.createElement('img');im.className='tile';
+   im.style.left=(x*TILE)+'px';im.style.top=(y*TILE)+'px';
+   im.dataset.provider=0;im.dataset.x=xx;im.dataset.y=y;im.dataset.z=zoom;
+   im.src=providers[0]({z:zoom,x:xx,y:y});
+   im.onerror=function(){let p=+this.dataset.provider+1;if(p<providers.length){this.dataset.provider=p;this.src=providers[p]({z:+this.dataset.z,x:+this.dataset.x,y:+this.dataset.y})}else{this.style.opacity=.05;failedTiles++;if(failedTiles>4)document.getElementById('mapError').style.display='block'}};
+   tiles.appendChild(im);
+ }
+ renderMarkers(left,top);
+}
+function renderMarkers(left,top){
+ markers.innerHTML='';const q=document.getElementById('search').value.toLowerCase().trim(),d=document.getElementById('district').value;
+ const rows=DATA.filter(r=>{const text=Object.values(r).join(' ').toLowerCase();return(!q||text.includes(q))&&(!d||val(r,['Район'])===d)});
+ document.getElementById('all').textContent=DATA.length;document.getElementById('shown').textContent=rows.length;
+ document.getElementById('staff').textContent=rows.reduce((s,r)=>s+(parseInt(val(r,['Личный состав']))||0),0);
+ rows.forEach(r=>{const c=coord(r);if(!c)return;const [wx,wy]=world(c[0],c[1],zoom),el=document.createElement('div');el.className='marker';
+ el.style.left=(wx-left)+'px';el.style.top=(wy-top)+'px';el.innerHTML='<svg viewBox="0 0 34 38"><path d="M17 37C14 31 4 24 4 15a13 13 0 1 1 26 0c0 9-10 16-13 22z" fill="#d32f2f" stroke="#fff" stroke-width="2"/><text x="17" y="20" text-anchor="middle" font-size="12">🚒</text></svg>';
+ el.onclick=e=>{e.stopPropagation();showPopup(r,el)};markers.appendChild(el)})
+}
+function showPopup(r,anchor){
+ document.querySelectorAll('.popup').forEach(x=>x.remove());const p=document.createElement('div');p.className='popup';
+ const rect=anchor.getBoundingClientRect(),mr=map.getBoundingClientRect();let l=rect.left-mr.left+25,t=rect.top-mr.top+5;
+ p.style.left=Math.min(Math.max(5,l),map.clientWidth-330)+'px';p.style.top=Math.min(Math.max(5,t),map.clientHeight-230)+'px';
+ const place=val(r,['Населенный пункт','Населённый пункт']);
+ p.innerHTML='<span class="close">✕</span><h3>🚒 '+esc(val(r,['Подразделение']))+'</h3>'+
+ '<p><b>Район:</b> '+esc(val(r,['Район']))+'</p><p><b>Населённый пункт:</b> '+esc(place)+'</p>'+
+ '<p><b>Личный состав:</b> '+esc(val(r,['Личный состав']))+'</p><p><b>Техника:</b> '+esc(val(r,['Техника']))+'</p>'+
+ '<p><b>Телефон:</b> '+esc(val(r,['Номер телефона']))+'</p><p><b>Координаты:</b> '+coord(r).join(', ')+'</p>';
+ p.querySelector('.close').onclick=()=>p.remove();map.appendChild(p);
+}
+function renderList(){
+ const q=document.getElementById('search').value.toLowerCase().trim(),d=document.getElementById('district').value,rows=DATA.filter(r=>{const text=Object.values(r).join(' ').toLowerCase();return(!q||text.includes(q))&&(!d||val(r,['Район'])===d)});
+ const list=document.getElementById('list');list.innerHTML='';if(!rows.length){list.innerHTML='<div style="padding:20px;color:#777">Ничего не найдено</div>';return}
+ rows.forEach(r=>{const e=document.createElement('div');e.className='item';e.innerHTML='<b>'+esc(val(r,['Подразделение']))+'</b><small>'+esc(val(r,['Район']))+' · '+esc(val(r,['Населенный пункт','Населённый пункт']))+'</small>';e.onclick=()=>{const c=coord(r);if(c){
+ center={lat:c[0],lon:c[1]};
+ if(window.matchMedia('(max-width:700px)').matches){setMobileList(false)}else{renderTiles()}
+ if(window.matchMedia('(max-width:700px)').matches){
+   const anchor={getBoundingClientRect:()=>{const mr=map.getBoundingClientRect();return {left:mr.left+mr.width/2,top:mr.top+mr.height/2}}};
+   showPopup(r,anchor);
+ }
+}};list.appendChild(e)})
+}
+function update(){renderTiles();renderList()}
+function setMobileList(open){
+ document.body.classList.toggle('list-open',open);
+ const btn=document.getElementById('listToggle');
+ btn.setAttribute('aria-expanded',String(open));
+ btn.textContent=open?'✕ Скрыть список подразделений':'☰ Показать список подразделений';
+ renderTiles();
+}
+document.getElementById('listToggle').onclick=()=>setMobileList(!document.body.classList.contains('list-open'));
+
+async function loadRemoteData(){
+ const cfg=window.APP_CONFIG||{};
+ if(!cfg.SUPABASE_URL||!cfg.SUPABASE_ANON_KEY||cfg.SUPABASE_URL.includes('YOUR_PROJECT')||cfg.SUPABASE_ANON_KEY.includes('YOUR_ANON_KEY')) return;
+ const status=document.getElementById('syncStatus');
+ try{
+  status.textContent='Подключение к общей базе…';
+  const url=cfg.SUPABASE_URL.replace(/\/$/,'')+'/rest/v1/departments?select=*&order=name.asc';
+  const response=await fetch(url,{headers:{apikey:cfg.SUPABASE_ANON_KEY}});
+  if(!response.ok) throw new Error('HTTP '+response.status);
+  const rows=await response.json();
+  if(!Array.isArray(rows)) throw new Error('Неверный формат данных');
+  DATA=rows.map(r=>({
+   'Подразделение':r.name??'—','Район':r.district??'—','Населенный пункт':r.settlement??'—',
+   'Адрес':r.address??'—','Личный состав':r.staff_total??'—',
+   'Техника':Array.isArray(r.equipment)&&r.equipment.length?r.equipment.map(e=>`${e.name||e.category||'Оборудование'}${e.quantity!=null?' — '+e.quantity+' ед.':''}${e.status?' ('+e.status+')':''}`).join('; '):(r.equipment_text??'—'),
+   'Номер телефона':r.phone??'—','Широта':r.latitude,'Долгота':r.longitude
+  }));
+  const district=document.getElementById('district');district.innerHTML='<option value="">Все районы</option>';
+  [...new Set(DATA.map(r=>String(val(r,['Район'])).trim()).filter(x=>x&&x!=='—'))].sort((a,b)=>a.localeCompare(b,'ru')).forEach(d=>{const o=document.createElement('option');o.value=d;o.textContent=d;district.appendChild(o)});
+  status.textContent='Общая база подключена · записей: '+DATA.length+' · обновите страницу для повторной загрузки';update();
+ }catch(err){status.textContent='Не удалось подключиться к общей базе. Данные не отображаются.';console.warn('Supabase:',err)}
+}
+
+
+// Авторизация — токен хранится только в памяти открытой страницы.
+let adminToken=null;
+let adminRows=[];
+const adminPanel=document.getElementById('adminPanel');
+const ae=id=>document.getElementById(id);
+const adminMsg=message=>{ae('adminMessage').textContent=message};
+const adminCfg=()=>window.APP_CONFIG||{};
+const adminBase=()=>String(adminCfg().SUPABASE_URL||'').replace(/\/$/,'');
+const adminHeaders=(json=true)=>({apikey:adminCfg().SUPABASE_ANON_KEY,Authorization:'Bearer '+adminToken,...(json?{'Content-Type':'application/json'}:{})});
+function adminShowEditor(visible){ae('adminLogin').style.display=visible?'none':'block';ae('adminEditor').style.display=visible?'block':'none'}
+function adminOpen(){adminPanel.classList.add('open');adminMsg('');adminShowEditor(!!adminToken);if(adminToken) adminLoadRows()}
+function adminClose(){adminPanel.classList.remove('open');ae('adminPassword').value=''}
+ae('adminOpen').onclick=adminOpen;
+ae('adminCloseLogin').onclick=adminClose;
+ae('adminCloseEditor').onclick=adminClose;
+adminPanel.addEventListener('click',e=>{if(e.target===adminPanel)adminClose()});
+async function adminRequest(path,options={}){
+ const response=await fetch(adminBase()+path,{...options,headers:{...adminHeaders(),...(options.headers||{})}});
+ const txt=await response.text();let result;try{result=txt?JSON.parse(txt):null}catch{result={message:txt}}
+ if(!response.ok)throw new Error(result?.message||result?.msg||result?.error_description||('HTTP '+response.status));
+ return result;
+}
+ae('adminSignIn').onclick=async()=>{
+ const email=ae('adminEmail').value.trim(),password=ae('adminPassword').value;
+ if(!email||!password){adminMsg('Укажите почту и пароль.');return}
+ if(!adminBase()||!adminCfg().SUPABASE_ANON_KEY){adminMsg('В config.js не указано подключение Supabase.');return}
+ ae('adminSignIn').disabled=true;adminMsg('Проверяем учётную запись…');
+ try{
+  // Для нового publishable key используется apikey; вход — Supabase Auth API.
+  const response=await fetch(adminBase()+'/auth/v1/token?grant_type=password',{
+    method:'POST',headers:{apikey:adminCfg().SUPABASE_ANON_KEY,'Content-Type':'application/json'},
+    body:JSON.stringify({email,password})
+  });
+  const result=await response.json();
+  if(!response.ok||!result.access_token)throw new Error(result.msg||result.error_description||result.message||'Не удалось войти');
+  adminToken=result.access_token;
+  ae('adminPassword').value='';
+  // Проверяем сервером право видеть собственную строку в app_admins.
+  const status=await adminRequest('/rest/v1/app_admins?select=user_id&limit=1');
+  if(!Array.isArray(status)||status.length===0){adminToken=null;throw new Error('Учётная запись не включена в список администраторов.')}
+  adminShowEditor(true);await adminLoadRows();adminMsg('Вход администратора выполнен.')
+ }catch(err){adminToken=null;adminShowEditor(false);adminMsg('Ошибка входа: '+err.message)}
+ finally{ae('adminSignIn').disabled=false}
+};
+async function adminLoadRows(selectedId=''){
+ try{
+  const rows=await adminRequest('/rest/v1/departments?select=*&order=name.asc');
+  adminRows=rows;
+  const dropdown=ae('adminRow');dropdown.replaceChildren(new Option('Новое подразделение',''));
+  rows.forEach(r=>dropdown.add(new Option(r.name||'Без названия',r.id)));
+  dropdown.value=selectedId&&rows.some(r=>r.id===selectedId)?selectedId:'';
+  adminFill();
+ }catch(err){adminMsg('Не удалось загрузить записи: '+err.message)}
+}
+function adminFill(){
+ const r=adminRows.find(x=>x.id===ae('adminRow').value)||{};
+ const vals={editName:r.name,editDistrict:r.district,editSettlement:r.settlement,editAddress:r.address,editStaff:r.staff_total,editEquipment:r.equipment_text,editPhone:r.phone,editLatitude:r.latitude,editLongitude:r.longitude};
+ Object.entries(vals).forEach(([id,value])=>ae(id).value=value??'');
+ ae('adminDelete').disabled=!r.id;
+ adminMsg('');
+}
+ae('adminRow').onchange=adminFill;
+function adminPayload(){
+ const str=id=>ae(id).value.trim();
+ const num=id=>str(id)===''?null:Number(str(id));
+ const name=str('editName');if(!name)throw new Error('Введите название подразделения.');
+ const staff=num('editStaff'),lat=num('editLatitude'),lon=num('editLongitude');
+ if(staff!==null&&(!Number.isInteger(staff)||staff<0))throw new Error('Численность должна быть целым неотрицательным числом.');
+ if(lat!==null&&(!Number.isFinite(lat)||lat< -90||lat>90))throw new Error('Широта должна быть от −90 до 90.');
+ if(lon!==null&&(!Number.isFinite(lon)||lon< -180||lon>180))throw new Error('Долгота должна быть от −180 до 180.');
+ return {name,district:str('editDistrict')||null,settlement:str('editSettlement')||null,address:str('editAddress')||null,staff_total:staff,equipment_text:str('editEquipment')||null,phone:str('editPhone')||null,latitude:lat,longitude:lon};
+}
+ae('adminSave').onclick=async()=>{
+ if(!adminToken)return adminMsg('Сначала войдите.');
+ ae('adminSave').disabled=true;
+ try{
+  const body=adminPayload(),id=ae('adminRow').value;
+  await adminRequest('/rest/v1/departments'+(id?'?id=eq.'+encodeURIComponent(id):''),{
+   method:id?'PATCH':'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify(body)
+  });
+  await adminLoadRows(id);await loadRemoteData();adminMsg('Тестовая запись сохранена в Supabase.')
+ }catch(err){adminMsg('Не удалось сохранить: '+err.message)}
+ finally{ae('adminSave').disabled=false}
+};
+ae('adminDelete').onclick=async()=>{
+ const id=ae('adminRow').value;if(!adminToken||!id)return;
+ const r=adminRows.find(x=>x.id===id);
+ if(!confirm('Удалить тестовую запись «'+(r?.name||'')+'»?'))return;
+ try{
+  await adminRequest('/rest/v1/departments?id=eq.'+encodeURIComponent(id),{method:'DELETE',headers:{Prefer:'return=minimal'}});
+  await adminLoadRows();await loadRemoteData();adminMsg('Тестовая запись удалена.')
+ }catch(err){adminMsg('Не удалось удалить: '+err.message)}
+};
+ae('adminSignOut').onclick=async()=>{
+ const token=adminToken;adminToken=null;
+ try{await fetch(adminBase()+'/auth/v1/logout',{method:'POST',headers:{apikey:adminCfg().SUPABASE_ANON_KEY,Authorization:'Bearer '+token}})}catch{}
+ adminRows=[];ae('adminPassword').value='';adminShowEditor(false);adminMsg('Вы вышли из административного режима.');
+};
+
+document.getElementById('search').oninput=update;document.getElementById('district').onchange=update;
+document.getElementById('reset').onclick=()=>{document.getElementById('search').value='';document.getElementById('district').value='';update()};
+document.getElementById('plus').onclick=()=>{zoom=Math.min(18,zoom+1);renderTiles()};
+document.getElementById('minus').onclick=()=>{zoom=Math.max(3,zoom-1);renderTiles()};
+document.getElementById('home').onclick=()=>{zoom=7;center={lat:54.87,lon:69.15};update()};
+map.onpointerdown=e=>{
+ if(e.target.closest('.marker,.popup,.mapbtns'))return;
+ dragging=true;sx=e.clientX;sy=e.clientY;map.classList.add('drag');
+ map.setPointerCapture(e.pointerId);
+};
+map.onpointerup=map.onpointercancel=()=>{dragging=false;map.classList.remove('drag')};
+map.onpointermove=e=>{
+ if(!dragging)return;
+ const [cx,cy]=world(center.lat,center.lon,zoom),nx=cx-(e.clientX-sx),ny=cy-(e.clientY-sy);
+ const [lat,lon]=unworld(nx,ny,zoom);center={lat,lon};sx=e.clientX;sy=e.clientY;renderTiles();
+};
+map.onwheel=e=>{e.preventDefault();zoom=Math.max(3,Math.min(18,zoom+(e.deltaY<0?1:-1)));renderTiles()};
+window.onresize=renderTiles;
+[...new Set(DATA.map(r=>String(val(r,['Район'])).trim()).filter(x=>x&&x!=='—'))].sort((a,b)=>a.localeCompare(b,'ru')).forEach(d=>{const o=document.createElement('option');o.value=d;o.textContent=d;document.getElementById('district').appendChild(o)});
+update();
+loadRemoteData();
+</script>
+<script>if('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('./service-worker.js').catch(()=>{});</script>
+</body>
+</html>
